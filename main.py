@@ -14,7 +14,7 @@ creds = Credentials.from_service_account_info(creds_dict, scopes=[
 # 2. 구글 시트 연결
 client = gspread.authorize(creds)
 # 여기에 형님의 구글 시트 이름을 적으세요 (나중에 수정 가능)
-sheet = client.open("올리브영_봇_결과").sheet1
+sheet = client.open("올리브영 실시간 금액 관리").sheet1
 
 # 3. 테스트 데이터 쓰기
 sheet.append_row(["날짜", "상품명", "가격", "링크"])
