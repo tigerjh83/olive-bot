@@ -1,4 +1,3 @@
 gspread
 google-auth
-beautifulsoup4
-curl_cffi
+playwright
