@@ -1,3 +1,4 @@
 gspread
 google-auth
-playwright
+requests
+beautifulsoup4
