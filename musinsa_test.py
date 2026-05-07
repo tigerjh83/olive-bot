@@ -1,37 +1,57 @@
 import requests
 import json
-import re
 
-# 테스트 상품 URL
-url = "https://www.musinsa.com/products/5190556"
-
-# 상품 번호 추출
-goods_no_match = re.search(r'/products/(\d+)', url)
-goods_no = goods_no_match.group(1) if goods_no_match else "5190556"
+url = "https://goods-detail.musinsa.com/api2/goods/5190556/options/v2/prioritized-inventories"
 
 headers = {
-    "User-Agent": "Mozilla/5.0",
-    "Accept": "application/json"
+    "accept": "application/json",
+    "content-type": "application/json",
+    "origin": "https://www.musinsa.com",
+    "referer": "https://www.musinsa.com/",
+    "user-agent": "Mozilla/5.0"
+}
+
+payload = {
+    "optionValueNos": [
+        21518632,
+        21518633,
+        21518634,
+        21518635,
+        21518636,
+        21518637,
+        21518638,
+        21518639,
+        21518640,
+        21518641,
+        21518642,
+        21518643,
+        21518644,
+        21518645,
+        21518646,
+        21518647,
+        21518648,
+        21518649,
+        21518650
+    ]
 }
 
 try:
-    print(f"🚀 무신사 상품번호 [{goods_no}] API 타격 시작...")
+    print("🚀 무신사 재고 API POST 테스트 시작")
 
-    # 재고 API 직접 호출
-    stock_api = f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/options/v2/prioritized-inventories"
+    res = requests.post(
+        url,
+        headers=headers,
+        json=payload,
+        timeout=10
+    )
 
-    stock_res = requests.get(stock_api, headers=headers, timeout=10)
-    stock_res.raise_for_status()
+    print("상태코드:", res.status_code)
 
-    stock_data = stock_res.json()
+    data = res.json()
 
-    print("✅ 재고 API 연결 성공!\n")
+    print("✅ API 응답 성공!\n")
 
-    # JSON 앞부분 출력
-    print(json.dumps(stock_data, indent=2, ensure_ascii=False)[:3000])
-
-except requests.exceptions.RequestException as e:
-    print(f"❌ API 에러: {e}")
+    print(json.dumps(data, indent=2, ensure_ascii=False)[:5000])
 
 except Exception as e:
-    print(f"⚠️ 에러 발생: {e}")
+    print("❌ 에러:", e)
