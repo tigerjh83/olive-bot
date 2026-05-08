@@ -6,7 +6,6 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 import os
 import time
-from bs4 import BeautifulSoup
 
 # ==========================================
 # 1. 구글 인증
@@ -42,7 +41,7 @@ product_urls = [
 # ==========================================
 
 headers = {
-    "accept": "application/json, text/html",
+    "accept": "application/json",
     "content-type": "application/json",
     "origin": "https://www.musinsa.com",
     "referer": "https://www.musinsa.com/",
@@ -50,7 +49,64 @@ headers = {
 }
 
 # ==========================================
-# 4. 상품 반복 시작
+# 4. 가격 정보 가져오기 함수
+# ==========================================
+
+def get_product_info(goods_no):
+
+    # 우선순위 1
+    api_candidates = [
+        f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation/other-color",
+        f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation"
+    ]
+
+    for api_url in api_candidates:
+
+        try:
+
+            print(f"🔍 가격 API 시도: {api_url}")
+
+            res = requests.get(
+                api_url,
+                headers=headers,
+                timeout=10
+            )
+
+            if res.status_code != 200:
+                continue
+
+            data = res.json()
+
+            for tab in data["data"]["curationTabs"]:
+
+                for item in tab["curationGoodsList"]:
+
+                    if str(item["goodsNo"]) == goods_no:
+
+                        return {
+                            "product_name": item.get("goodsName", "UNKNOWN"),
+                            "brand_name": item.get("brandName", "UNKNOWN"),
+                            "price": item.get("price", 0),
+                            "coupon_price": item.get("couponPrice", 0),
+                            "sale_rate": item.get("couponSaleRate", 0)
+                        }
+
+        except Exception as e:
+
+            print(f"⚠️ 가격 API 실패: {api_url}")
+            print(e)
+
+    # 전부 실패 시
+    return {
+        "product_name": "UNKNOWN",
+        "brand_name": "UNKNOWN",
+        "price": 0,
+        "coupon_price": 0,
+        "sale_rate": 0
+    }
+
+# ==========================================
+# 5. 상품 반복 시작
 # ==========================================
 
 for product_url in product_urls:
@@ -73,60 +129,16 @@ for product_url in product_urls:
         goods_no = goods_no_match.group(1)
 
         # ==========================================
-        # HTML 상품 정보 가져오기
+        # 가격 정보 가져오기
         # ==========================================
 
-        html_res = requests.get(
-            product_url,
-            headers=headers,
-            timeout=10
-        )
+        product_info = get_product_info(goods_no)
 
-        html_res.raise_for_status()
-
-        soup = BeautifulSoup(html_res.text, "html.parser")
-
-        html_text = soup.get_text(" ", strip=True)
-
-        # 상품명
-        product_name = "UNKNOWN"
-
-        title_tag = soup.find("title")
-
-        if title_tag:
-            product_name = title_tag.text.replace(" | 무신사", "").strip()
-
-        # 브랜드
-        brand_name = "UNKNOWN"
-
-        brand_match = re.search(r'브랜드\s+([^\s]+)', html_text)
-
-        if brand_match:
-            brand_name = brand_match.group(1)
-
-        # 가격
-        price = 0
-
-        price_match = re.search(r'([\d,]+)원', html_text)
-
-        if price_match:
-            price = int(price_match.group(1).replace(",", ""))
-
-        # 쿠폰가
-        coupon_price = 0
-
-        coupon_match = re.search(r'([\d,]+)원\s*쿠폰', html_text)
-
-        if coupon_match:
-            coupon_price = int(coupon_match.group(1).replace(",", ""))
-
-        # 할인율
-        sale_rate = 0
-
-        sale_match = re.search(r'(\d+)%', html_text)
-
-        if sale_match:
-            sale_rate = int(sale_match.group(1))
+        product_name = product_info["product_name"]
+        brand_name = product_info["brand_name"]
+        price = product_info["price"]
+        coupon_price = product_info["coupon_price"]
+        sale_rate = product_info["sale_rate"]
 
         print(f"✅ 상품명: {product_name}")
         print(f"✅ 가격: {price}")
