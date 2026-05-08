@@ -93,7 +93,38 @@ def get_product_info(goods_no):
     }
 
 # ==========================================
-# 5. 상품 반복 시작
+# 5. 재고 상태 판정 함수
+# ==========================================
+
+def parse_stock_status(stock):
+    remain_qty = stock.get("remainQuantity")
+    out_of_stock = stock.get("outOfStock")
+    related_option = stock.get("relatedOption")
+
+    # 무신사/직접 재고 있음
+    if out_of_stock is False:
+        status = "판매중"
+
+        if remain_qty is None:
+            remain_qty = "재고수량 비공개"
+
+        return remain_qty, status
+
+    # 직접 재고는 없지만 브랜드배송/대체옵션 가능
+    if related_option and related_option.get("outOfStock") is False:
+        status = "판매중(브랜드배송)"
+        remain_qty = "재고수량 비공개"
+
+        return remain_qty, status
+
+    # 완전 품절
+    status = "품절"
+    remain_qty = 0
+
+    return remain_qty, status
+
+# ==========================================
+# 6. 상품 반복 시작
 # ==========================================
 
 for product_url in product_urls:
@@ -168,16 +199,7 @@ for product_url in product_urls:
         for idx, stock in enumerate(stock_data["data"]):
             size_name = size_list[idx] if idx < len(size_list) else "UNKNOWN"
 
-            out_of_stock = stock.get("outOfStock")
-            remain_qty = stock.get("remainQuantity")
-
-            if out_of_stock:
-                status = "품절"
-                remain_qty = 0
-            else:
-                status = "판매중"
-                if remain_qty is None:
-                    remain_qty = "재고수량 비공개"
+            remain_qty, status = parse_stock_status(stock)
 
             row = [
                 now,
