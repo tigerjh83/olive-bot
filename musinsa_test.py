@@ -76,7 +76,7 @@ for product_url in product_urls:
 
         stock_api = f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/options/v2/prioritized-inventories"
 
-        price_api = f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation"
+        price_api = f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation/other-color"
 
         # ==========================================
         # 가격 정보 가져오기
@@ -93,6 +93,7 @@ for product_url in product_urls:
         product_info = None
 
         try:
+
             for tab in price_data["data"]["curationTabs"]:
 
                 for item in tab["curationGoodsList"]:
@@ -101,8 +102,8 @@ for product_url in product_urls:
                         product_info = item
                         break
 
-        except:
-            pass
+        except Exception as e:
+            print("⚠️ 가격 데이터 탐색 실패:", e)
 
         # 가격정보 못찾으면 기본값
         if not product_info:
