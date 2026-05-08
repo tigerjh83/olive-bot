@@ -6,6 +6,7 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 import os
 import time
+from bs4 import BeautifulSoup
 
 # ==========================================
 # 1. 구글 인증
@@ -41,7 +42,7 @@ product_urls = [
 # ==========================================
 
 headers = {
-    "accept": "application/json",
+    "accept": "application/json, text/html",
     "content-type": "application/json",
     "origin": "https://www.musinsa.com",
     "referer": "https://www.musinsa.com/",
@@ -59,7 +60,10 @@ for product_url in product_urls:
         print("=" * 50)
         print(f"🚀 상품 처리 시작: {product_url}")
 
+        # ==========================================
         # 상품번호 추출
+        # ==========================================
+
         goods_no_match = re.search(r'/products/(\d+)', product_url)
 
         if not goods_no_match:
@@ -69,64 +73,69 @@ for product_url in product_urls:
         goods_no = goods_no_match.group(1)
 
         # ==========================================
-        # API URL
+        # HTML 상품 정보 가져오기
         # ==========================================
 
-        option_api = f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/options?goodsSaleType=SALE&optKindCd=SHOES"
-
-        stock_api = f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/options/v2/prioritized-inventories"
-
-        price_api = f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation/other-color"
-
-        # ==========================================
-        # 가격 정보 가져오기
-        # ==========================================
-
-        price_res = requests.get(
-            price_api,
+        html_res = requests.get(
+            product_url,
             headers=headers,
             timeout=10
         )
 
-        price_data = price_res.json()
+        html_res.raise_for_status()
 
-        product_info = None
+        soup = BeautifulSoup(html_res.text, "html.parser")
 
-        try:
+        html_text = soup.get_text(" ", strip=True)
 
-            for tab in price_data["data"]["curationTabs"]:
+        # 상품명
+        product_name = "UNKNOWN"
 
-                for item in tab["curationGoodsList"]:
+        title_tag = soup.find("title")
 
-                    if str(item["goodsNo"]) == goods_no:
-                        product_info = item
-                        break
+        if title_tag:
+            product_name = title_tag.text.replace(" | 무신사", "").strip()
 
-        except Exception as e:
-            print("⚠️ 가격 데이터 탐색 실패:", e)
+        # 브랜드
+        brand_name = "UNKNOWN"
 
-        # 가격정보 못찾으면 기본값
-        if not product_info:
+        brand_match = re.search(r'브랜드\s+([^\s]+)', html_text)
 
-            product_name = "UNKNOWN"
-            brand_name = "UNKNOWN"
-            price = 0
-            coupon_price = 0
-            sale_rate = 0
+        if brand_match:
+            brand_name = brand_match.group(1)
 
-        else:
+        # 가격
+        price = 0
 
-            product_name = product_info.get("goodsName", "UNKNOWN")
-            brand_name = product_info.get("brandName", "UNKNOWN")
-            price = product_info.get("price", 0)
-            coupon_price = product_info.get("couponPrice", 0)
-            sale_rate = product_info.get("couponSaleRate", 0)
+        price_match = re.search(r'([\d,]+)원', html_text)
+
+        if price_match:
+            price = int(price_match.group(1).replace(",", ""))
+
+        # 쿠폰가
+        coupon_price = 0
+
+        coupon_match = re.search(r'([\d,]+)원\s*쿠폰', html_text)
+
+        if coupon_match:
+            coupon_price = int(coupon_match.group(1).replace(",", ""))
+
+        # 할인율
+        sale_rate = 0
+
+        sale_match = re.search(r'(\d+)%', html_text)
+
+        if sale_match:
+            sale_rate = int(sale_match.group(1))
 
         print(f"✅ 상품명: {product_name}")
+        print(f"✅ 가격: {price}")
 
         # ==========================================
         # 옵션 API
         # ==========================================
+
+        option_api = f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/options?goodsSaleType=SALE&optKindCd=SHOES"
 
         option_res = requests.get(
             option_api,
@@ -154,6 +163,8 @@ for product_url in product_urls:
         # ==========================================
         # 재고 API
         # ==========================================
+
+        stock_api = f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/options/v2/prioritized-inventories"
 
         payload = {
             "optionValueNos": option_value_nos
