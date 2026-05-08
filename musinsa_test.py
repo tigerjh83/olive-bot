@@ -54,7 +54,6 @@ headers = {
 
 def get_product_info(goods_no):
 
-    # 우선순위 1
     api_candidates = [
         f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation/other-color",
         f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation"
@@ -96,7 +95,6 @@ def get_product_info(goods_no):
             print(f"⚠️ 가격 API 실패: {api_url}")
             print(e)
 
-    # 전부 실패 시
     return {
         "product_name": "UNKNOWN",
         "brand_name": "UNKNOWN",
@@ -159,7 +157,9 @@ for product_url in product_urls:
 
         option_values = option_data["data"]["basic"][0]["optionValues"]
 
+        # optionValueNo ↔ 사이즈명 매핑
         size_map = {}
+
         option_value_nos = []
 
         for item in option_values:
@@ -199,9 +199,12 @@ for product_url in product_urls:
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        for idx, stock in enumerate(stock_data["data"]):
+        for stock in stock_data["data"]:
 
-            size_name = list(size_map.values())[idx]
+            # 핵심 수정 부분
+            option_value_no = stock.get("optionValueNo")
+
+            size_name = size_map.get(option_value_no, "UNKNOWN")
 
             remain_qty = stock.get("remainQuantity")
 
