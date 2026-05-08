@@ -53,23 +53,16 @@ headers = {
 # ==========================================
 
 def get_product_info(goods_no):
-
     api_candidates = [
         f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation/other-color",
         f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation"
     ]
 
     for api_url in api_candidates:
-
         try:
-
             print(f"🔍 가격 API 시도: {api_url}")
 
-            res = requests.get(
-                api_url,
-                headers=headers,
-                timeout=10
-            )
+            res = requests.get(api_url, headers=headers, timeout=10)
 
             if res.status_code != 200:
                 continue
@@ -77,21 +70,17 @@ def get_product_info(goods_no):
             data = res.json()
 
             for tab in data["data"]["curationTabs"]:
-
                 for item in tab["curationGoodsList"]:
-
-                    if str(item["goodsNo"]) == goods_no:
-
+                    if str(item.get("goodsNo")) == goods_no:
                         return {
                             "product_name": item.get("goodsName", "UNKNOWN"),
                             "brand_name": item.get("brandName", "UNKNOWN"),
                             "price": item.get("price", 0),
-                            "coupon_price": item.get("couponPrice", 0),
-                            "sale_rate": item.get("couponSaleRate", 0)
+                            "coupon_price": item.get("couponPrice", 0) or 0,
+                            "sale_rate": item.get("couponSaleRate", 0) or 0
                         }
 
         except Exception as e:
-
             print(f"⚠️ 가격 API 실패: {api_url}")
             print(e)
 
@@ -108,15 +97,9 @@ def get_product_info(goods_no):
 # ==========================================
 
 for product_url in product_urls:
-
     try:
-
         print("=" * 50)
         print(f"🚀 상품 처리 시작: {product_url}")
-
-        # ==========================================
-        # 상품번호 추출
-        # ==========================================
 
         goods_no_match = re.search(r'/products/(\d+)', product_url)
 
@@ -126,10 +109,7 @@ for product_url in product_urls:
 
         goods_no = goods_no_match.group(1)
 
-        # ==========================================
-        # 가격 정보 가져오기
-        # ==========================================
-
+        # 가격 정보
         product_info = get_product_info(goods_no)
 
         product_name = product_info["product_name"]
@@ -140,42 +120,30 @@ for product_url in product_urls:
 
         print(f"✅ 상품명: {product_name}")
         print(f"✅ 가격: {price}")
+        print(f"✅ 쿠폰가: {coupon_price}")
 
-        # ==========================================
         # 옵션 API
-        # ==========================================
-
         option_api = f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/options?goodsSaleType=SALE&optKindCd=SHOES"
 
-        option_res = requests.get(
-            option_api,
-            headers=headers,
-            timeout=10
-        )
-
+        option_res = requests.get(option_api, headers=headers, timeout=10)
+        option_res.raise_for_status()
         option_data = option_res.json()
 
         option_values = option_data["data"]["basic"][0]["optionValues"]
 
-        # optionValueNo ↔ 사이즈명 매핑
-        size_map = {}
-
+        size_list = []
         option_value_nos = []
 
         for item in option_values:
-
             option_no = item["no"]
             size_name = item["name"]
 
-            size_map[option_no] = size_name
+            size_list.append(size_name)
             option_value_nos.append(option_no)
 
         print("✅ 사이즈 목록 확보 완료")
 
-        # ==========================================
         # 재고 API
-        # ==========================================
-
         stock_api = f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/options/v2/prioritized-inventories"
 
         payload = {
@@ -189,32 +157,27 @@ for product_url in product_urls:
             timeout=10
         )
 
+        stock_res.raise_for_status()
         stock_data = stock_res.json()
 
         print("✅ 재고 API 연결 완료")
 
-        # ==========================================
         # 구글시트 저장
-        # ==========================================
-
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        for stock in stock_data["data"]:
-
-            # 핵심 수정 부분
-            option_value_no = stock.get("optionValueNo")
-
-            size_name = size_map.get(option_value_no, "UNKNOWN")
-
-            remain_qty = stock.get("remainQuantity")
+        for idx, stock in enumerate(stock_data["data"]):
+            size_name = size_list[idx] if idx < len(size_list) else "UNKNOWN"
 
             out_of_stock = stock.get("outOfStock")
+            remain_qty = stock.get("remainQuantity")
 
             if out_of_stock:
                 status = "품절"
                 remain_qty = 0
             else:
                 status = "판매중"
+                if remain_qty is None:
+                    remain_qty = "재고수량 비공개"
 
             row = [
                 now,
@@ -231,15 +194,13 @@ for product_url in product_urls:
 
             result_sheet.append_row(row)
 
-            print(f"✅ 저장 완료: {size_name} / {remain_qty}")
+            print(f"✅ 저장 완료: {size_name} / {remain_qty} / {status}")
 
         print(f"🔥 완료: {product_name}")
 
-        # 너무 빠른 호출 방지
         time.sleep(3)
 
     except Exception as e:
-
         print(f"❌ 에러 발생: {product_url}")
         print(e)
 
