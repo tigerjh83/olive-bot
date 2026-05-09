@@ -158,26 +158,28 @@ def get_price_from_curation(goods_no):
 
             data = res.json()
 
-            curation_tabs = data.get("data", {}).get("curationTabs", [])
+            item = find_product_item_by_goods_no(data, goods_no)
 
-            for tab in curation_tabs:
-                goods_list = tab.get("curationGoodsList", [])
+            if not item:
+                print("⚠️ curation 안에서 goodsNo 일치 item 없음")
+                continue
 
-                for item in goods_list:
-                    if str(item.get("goodsNo")) == str(goods_no):
-                        price = clean_price(item.get("price"))
-                        coupon_price = clean_price(item.get("couponPrice"))
-                        sale_rate = to_number(item.get("couponSaleRate"))
+            price = clean_price(item.get("price"))
+            coupon_price = clean_price(item.get("couponPrice"))
+            sale_rate = to_number(item.get("couponSaleRate"))
 
-                        print(f"💰 curation 가격 발견: {price}")
-                        print(f"💰 curation 쿠폰가 발견: {coupon_price}")
-                        print(f"💰 curation 할인율 발견: {sale_rate}")
+            if price > 0 or coupon_price > 0:
+                print(f"💰 curation 가격 발견: {price}")
+                print(f"💰 curation 쿠폰가 발견: {coupon_price}")
+                print(f"💰 curation 할인율 발견: {sale_rate}")
 
-                        return {
-                            "price": price,
-                            "coupon_price": coupon_price,
-                            "sale_rate": sale_rate
-                        }
+                return {
+                    "price": price,
+                    "coupon_price": coupon_price,
+                    "sale_rate": sale_rate
+                }
+
+            print("⚠️ goodsNo 일치 item은 찾았지만 가격 값이 없음")
 
         except Exception as e:
             print(f"⚠️ 가격 curation API 실패: {api_url}")
@@ -225,13 +227,13 @@ def get_product_info(goods_no, product_url):
         "sale_rate": 0
     }
 
-    # 1. 가격은 curationGoodsList 방식으로만 가져오기
+    # 1. 가격/쿠폰가/할인율은 curation API에서 goodsNo 일치 객체 기준으로만 추출
     price_info = get_price_from_curation(goods_no)
     best_info["price"] = price_info["price"]
     best_info["coupon_price"] = price_info["coupon_price"]
     best_info["sale_rate"] = price_info["sale_rate"]
 
-    # 2. 상품명/브랜드는 기존 fallback 유지
+    # 2. 상품명/브랜드는 fallback 유지
     info_api_candidates = [
         f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation/other-color",
         f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation",
@@ -271,7 +273,6 @@ def get_product_info(goods_no, product_url):
             print(f"⚠️ 상품명/브랜드 API 실패: {api_url}")
             print(e)
 
-    # 3. 그래도 상품명이 없으면 HTML title 사용
     if best_info["product_name"] == "UNKNOWN":
         best_info["product_name"] = get_title_from_html(product_url)
 
