@@ -24,16 +24,26 @@ creds = Credentials.from_service_account_info(
 
 client = gspread.authorize(creds)
 
-result_sheet = client.open("무신사 신발 재고관리").sheet1
+# 결과 저장 시트
+spreadsheet = client.open("무신사 신발 재고관리")
+result_sheet = spreadsheet.sheet1
+
+# URL 목록 시트
+url_sheet = spreadsheet.worksheet("URL_LIST")
 
 # ==========================================
-# 2. 추적 상품 URL
+# 2. URL_LIST 시트에서 상품 URL 읽기
 # ==========================================
+
+url_values = url_sheet.col_values(1)
 
 product_urls = [
-    "https://www.musinsa.com/products/5190556",
-    "https://www.musinsa.com/products/6174864"
+    url.strip()
+    for url in url_values[1:]
+    if url.strip()
 ]
+
+print(f"📌 URL_LIST에서 읽은 상품 수: {len(product_urls)}개")
 
 # ==========================================
 # 3. 공통 헤더
@@ -59,27 +69,20 @@ SIZE_COLUMNS = [
 ]
 
 # ==========================================
-# 5. 가격 정보 가져오기
+# 5. 가격 정보 가져오기 함수
 # ==========================================
 
 def get_product_info(goods_no):
-
     api_candidates = [
         f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation/other-color",
         f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation"
     ]
 
     for api_url in api_candidates:
-
         try:
-
             print(f"🔍 가격 API 시도: {api_url}")
 
-            res = requests.get(
-                api_url,
-                headers=headers,
-                timeout=10
-            )
+            res = requests.get(api_url, headers=headers, timeout=10)
 
             if res.status_code != 200:
                 continue
@@ -87,11 +90,8 @@ def get_product_info(goods_no):
             data = res.json()
 
             for tab in data["data"]["curationTabs"]:
-
                 for item in tab["curationGoodsList"]:
-
-                    if str(item.get("goodsNo")) == goods_no:
-
+                    if str(item.get("goodsNo")) == str(goods_no):
                         return {
                             "product_name": item.get("goodsName", "UNKNOWN"),
                             "brand_name": item.get("brandName", "UNKNOWN"),
@@ -101,7 +101,6 @@ def get_product_info(goods_no):
                         }
 
         except Exception as e:
-
             print(f"⚠️ 가격 API 실패: {api_url}")
             print(e)
 
@@ -114,24 +113,21 @@ def get_product_info(goods_no):
     }
 
 # ==========================================
-# 6. 재고 상태 판정
+# 6. 재고 상태 판정 함수
 # ==========================================
 
 def parse_stock_status(stock):
-
     remain_qty = stock.get("remainQuantity")
     out_of_stock = stock.get("outOfStock")
     related_option = stock.get("relatedOption")
 
-    # 판매중
+    # 무신사 직접 재고 있음
     if out_of_stock is False:
-
         if remain_qty is None:
             return "판매중"
-
         return str(remain_qty)
 
-    # 브랜드배송 가능
+    # 직접 재고는 없지만 브랜드배송/대체옵션 가능
     if related_option and related_option.get("outOfStock") is False:
         return "브랜드배송"
 
@@ -143,9 +139,7 @@ def parse_stock_status(stock):
 # ==========================================
 
 for product_url in product_urls:
-
     try:
-
         print("=" * 50)
         print(f"🚀 상품 처리 시작: {product_url}")
 
@@ -168,19 +162,14 @@ for product_url in product_urls:
         sale_rate = product_info["sale_rate"]
 
         print(f"✅ 상품명: {product_name}")
+        print(f"✅ 가격: {price}")
+        print(f"✅ 쿠폰가: {coupon_price}")
 
-        # ==========================================
         # 옵션 API
-        # ==========================================
-
         option_api = f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/options?goodsSaleType=SALE&optKindCd=SHOES"
 
-        option_res = requests.get(
-            option_api,
-            headers=headers,
-            timeout=10
-        )
-
+        option_res = requests.get(option_api, headers=headers, timeout=10)
+        option_res.raise_for_status()
         option_data = option_res.json()
 
         option_values = option_data["data"]["basic"][0]["optionValues"]
@@ -189,16 +178,15 @@ for product_url in product_urls:
         option_value_nos = []
 
         for item in option_values:
-
             size_name = item["name"]
+            option_no = item["no"]
 
             size_list.append(size_name)
-            option_value_nos.append(item["no"])
+            option_value_nos.append(option_no)
 
-        # ==========================================
+        print("✅ 사이즈 목록 확보 완료")
+
         # 재고 API
-        # ==========================================
-
         stock_api = f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/options/v2/prioritized-inventories"
 
         payload = {
@@ -212,29 +200,24 @@ for product_url in product_urls:
             timeout=10
         )
 
+        stock_res.raise_for_status()
         stock_data = stock_res.json()
 
-        # ==========================================
-        # 사이즈별 재고 딕셔너리
-        # ==========================================
+        print("✅ 재고 API 연결 완료")
 
+        # 사이즈별 재고 딕셔너리 만들기
         stock_map = {}
 
         for idx, stock in enumerate(stock_data["data"]):
-
             if idx >= len(size_list):
                 continue
 
             size_name = size_list[idx]
-
             stock_status = parse_stock_status(stock)
 
             stock_map[size_name] = stock_status
 
-        # ==========================================
         # 한 줄 데이터 생성
-        # ==========================================
-
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         row = [
@@ -247,17 +230,10 @@ for product_url in product_urls:
             product_url
         ]
 
-        # 사이즈 컬럼 채우기
         for size in SIZE_COLUMNS:
+            row.append(stock_map.get(size, ""))
 
-            value = stock_map.get(size, "")
-
-            row.append(value)
-
-        # ==========================================
         # 시트 저장
-        # ==========================================
-
         result_sheet.append_row(row)
 
         print(f"🔥 저장 완료: {product_name}")
@@ -265,7 +241,6 @@ for product_url in product_urls:
         time.sleep(3)
 
     except Exception as e:
-
         print(f"❌ 에러 발생: {product_url}")
         print(e)
 
