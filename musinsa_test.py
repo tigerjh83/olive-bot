@@ -85,6 +85,17 @@ def to_number(value):
     return int(value) if value else 0
 
 
+def clean_price(value):
+    price = to_number(value)
+
+    # 무신사 신발 가격 정상 범위만 인정
+    # 1,000원 미만 또는 5,000,000원 초과면 잘못 잡은 값으로 판단
+    if price < 1000 or price > 5000000:
+        return 0
+
+    return price
+
+
 def extract_info_from_item(item):
     if not isinstance(item, dict):
         return None
@@ -104,7 +115,7 @@ def extract_info_from_item(item):
         or "UNKNOWN"
     )
 
-    price = to_number(
+    price = clean_price(
         item.get("price")
         or item.get("normalPrice")
         or item.get("salePrice")
@@ -112,7 +123,7 @@ def extract_info_from_item(item):
         or item.get("originalPrice")
     )
 
-    coupon_price = to_number(
+    coupon_price = clean_price(
         item.get("couponPrice")
         or item.get("discountPrice")
         or item.get("finalPrice")
@@ -154,7 +165,7 @@ def find_product_item_by_goods_no(data, goods_no):
 
 
 def get_product_info(goods_no, product_url):
-    # 1순위: 기존에 정확했던 curation API
+    # 1순위: 기존에 가격이 정확했던 curation API
     curation_urls = [
         f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation/other-color",
         f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation"
@@ -176,14 +187,14 @@ def get_product_info(goods_no, product_url):
             if item:
                 info = extract_info_from_item(item)
 
-                if info:
+                if info and info["price"] > 0:
                     return info
 
         except Exception as e:
             print(f"⚠️ curation API 실패: {api_url}")
             print(e)
 
-    # 2순위: 상품명 fallback용 API
+    # 2순위: 상품정보 API
     info_api_candidates = [
         f"https://goods-detail.musinsa.com/api2/goods/{goods_no}",
         f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/detail",
@@ -207,13 +218,13 @@ def get_product_info(goods_no, product_url):
             if item:
                 info = extract_info_from_item(item)
 
-                if info:
+                if info and info["product_name"] != "UNKNOWN" and info["price"] > 0:
                     return info
 
             if isinstance(data, dict) and isinstance(data.get("data"), dict):
                 info = extract_info_from_item(data["data"])
 
-                if info and info["product_name"] != "UNKNOWN":
+                if info and info["product_name"] != "UNKNOWN" and info["price"] > 0:
                     return info
 
         except Exception as e:
@@ -240,7 +251,7 @@ def get_product_info(goods_no, product_url):
             )
 
             product_name = title_match.group(1).strip() if title_match else "UNKNOWN"
-            price = to_number(price_match.group(1)) if price_match else 0
+            price = clean_price(price_match.group(1)) if price_match else 0
 
             return {
                 "product_name": product_name,
