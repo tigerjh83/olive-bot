@@ -69,26 +69,6 @@ SIZE_COLUMNS = [
 # 5. 상품명 / 가격 정보 가져오기
 # ==========================================
 
-def deep_find_value(data, keys):
-    if isinstance(data, dict):
-        for key in keys:
-            if key in data and data[key] not in [None, ""]:
-                return data[key]
-
-        for value in data.values():
-            result = deep_find_value(value, keys)
-            if result not in [None, ""]:
-                return result
-
-    elif isinstance(data, list):
-        for item in data:
-            result = deep_find_value(item, keys)
-            if result not in [None, ""]:
-                return result
-
-    return None
-
-
 def to_number(value):
     if value is None:
         return 0
@@ -105,17 +85,113 @@ def to_number(value):
     return int(value) if value else 0
 
 
+def extract_info_from_item(item):
+    if not isinstance(item, dict):
+        return None
+
+    product_name = (
+        item.get("goodsName")
+        or item.get("goodsNm")
+        or item.get("productName")
+        or item.get("name")
+        or "UNKNOWN"
+    )
+
+    brand_name = (
+        item.get("brandName")
+        or item.get("brandNm")
+        or item.get("brand")
+        or "UNKNOWN"
+    )
+
+    price = to_number(
+        item.get("price")
+        or item.get("normalPrice")
+        or item.get("salePrice")
+        or item.get("goodsPrice")
+        or item.get("originalPrice")
+    )
+
+    coupon_price = to_number(
+        item.get("couponPrice")
+        or item.get("discountPrice")
+        or item.get("finalPrice")
+        or item.get("memberPrice")
+    )
+
+    sale_rate = to_number(
+        item.get("couponSaleRate")
+        or item.get("saleRate")
+        or item.get("discountRate")
+    )
+
+    return {
+        "product_name": product_name,
+        "brand_name": brand_name,
+        "price": price,
+        "coupon_price": coupon_price,
+        "sale_rate": sale_rate
+    }
+
+
+def find_product_item_by_goods_no(data, goods_no):
+    if isinstance(data, dict):
+        if str(data.get("goodsNo")) == str(goods_no):
+            return data
+
+        for value in data.values():
+            found = find_product_item_by_goods_no(value, goods_no)
+            if found:
+                return found
+
+    elif isinstance(data, list):
+        for item in data:
+            found = find_product_item_by_goods_no(item, goods_no)
+            if found:
+                return found
+
+    return None
+
+
 def get_product_info(goods_no, product_url):
-    api_candidates = [
-        f"https://goods-detail.musinsa.com/api2/goods/{goods_no}",
-        f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/detail",
-        f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/summary",
-        f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/information",
+    # 1순위: 기존에 정확했던 curation API
+    curation_urls = [
         f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation/other-color",
         f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation"
     ]
 
-    for api_url in api_candidates:
+    for api_url in curation_urls:
+        try:
+            print(f"🔍 curation 가격 API 시도: {api_url}")
+
+            res = requests.get(api_url, headers=headers, timeout=10)
+
+            if res.status_code != 200:
+                continue
+
+            data = res.json()
+
+            item = find_product_item_by_goods_no(data, goods_no)
+
+            if item:
+                info = extract_info_from_item(item)
+
+                if info:
+                    return info
+
+        except Exception as e:
+            print(f"⚠️ curation API 실패: {api_url}")
+            print(e)
+
+    # 2순위: 상품명 fallback용 API
+    info_api_candidates = [
+        f"https://goods-detail.musinsa.com/api2/goods/{goods_no}",
+        f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/detail",
+        f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/summary",
+        f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/information"
+    ]
+
+    for api_url in info_api_candidates:
         try:
             print(f"🔍 상품정보 API 시도: {api_url}")
 
@@ -126,43 +202,25 @@ def get_product_info(goods_no, product_url):
 
             data = res.json()
 
-            product_name = deep_find_value(data, [
-                "goodsName", "goodsNm", "productName", "name"
-            ])
+            item = find_product_item_by_goods_no(data, goods_no)
 
-            brand_name = deep_find_value(data, [
-                "brandName", "brandNm", "brand"
-            ])
+            if item:
+                info = extract_info_from_item(item)
 
-            price = deep_find_value(data, [
-                "price", "normalPrice", "salePrice", "goodsPrice", "originalPrice"
-            ])
+                if info:
+                    return info
 
-            coupon_price = deep_find_value(data, [
-                "couponPrice", "discountPrice", "finalPrice", "memberPrice"
-            ])
+            if isinstance(data, dict) and isinstance(data.get("data"), dict):
+                info = extract_info_from_item(data["data"])
 
-            sale_rate = deep_find_value(data, [
-                "couponSaleRate", "saleRate", "discountRate"
-            ])
-
-            if product_name or price:
-                return {
-                    "product_name": product_name or "UNKNOWN",
-                    "brand_name": brand_name or "UNKNOWN",
-                    "price": to_number(price),
-                    "coupon_price": to_number(coupon_price),
-                    "sale_rate": to_number(sale_rate)
-                }
+                if info and info["product_name"] != "UNKNOWN":
+                    return info
 
         except Exception as e:
             print(f"⚠️ 상품정보 API 실패: {api_url}")
             print(e)
 
-    # ==========================================
-    # HTML fallback
-    # ==========================================
-
+    # 3순위: HTML fallback
     try:
         print(f"🔍 HTML fallback 시도: {product_url}")
 
