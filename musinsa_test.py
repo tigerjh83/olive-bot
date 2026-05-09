@@ -66,18 +66,58 @@ SIZE_COLUMNS = [
 ]
 
 # ==========================================
-# 5. 가격 정보 가져오기
+# 5. 상품명 / 가격 정보 가져오기
 # ==========================================
 
-def get_product_info(goods_no):
+def deep_find_value(data, keys):
+    if isinstance(data, dict):
+        for key in keys:
+            if key in data and data[key] not in [None, ""]:
+                return data[key]
+
+        for value in data.values():
+            result = deep_find_value(value, keys)
+            if result not in [None, ""]:
+                return result
+
+    elif isinstance(data, list):
+        for item in data:
+            result = deep_find_value(item, keys)
+            if result not in [None, ""]:
+                return result
+
+    return None
+
+
+def to_number(value):
+    if value is None:
+        return 0
+
+    if isinstance(value, int):
+        return value
+
+    if isinstance(value, float):
+        return int(value)
+
+    value = str(value)
+    value = re.sub(r"[^0-9]", "", value)
+
+    return int(value) if value else 0
+
+
+def get_product_info(goods_no, product_url):
     api_candidates = [
+        f"https://goods-detail.musinsa.com/api2/goods/{goods_no}",
+        f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/detail",
+        f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/summary",
+        f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/information",
         f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation/other-color",
         f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation"
     ]
 
     for api_url in api_candidates:
         try:
-            print(f"🔍 가격 API 시도: {api_url}")
+            print(f"🔍 상품정보 API 시도: {api_url}")
 
             res = requests.get(api_url, headers=headers, timeout=10)
 
@@ -86,20 +126,75 @@ def get_product_info(goods_no):
 
             data = res.json()
 
-            for tab in data["data"]["curationTabs"]:
-                for item in tab["curationGoodsList"]:
-                    if str(item.get("goodsNo")) == str(goods_no):
-                        return {
-                            "product_name": item.get("goodsName", "UNKNOWN"),
-                            "brand_name": item.get("brandName", "UNKNOWN"),
-                            "price": item.get("price", 0),
-                            "coupon_price": item.get("couponPrice", 0) or 0,
-                            "sale_rate": item.get("couponSaleRate", 0) or 0
-                        }
+            product_name = deep_find_value(data, [
+                "goodsName", "goodsNm", "productName", "name"
+            ])
+
+            brand_name = deep_find_value(data, [
+                "brandName", "brandNm", "brand"
+            ])
+
+            price = deep_find_value(data, [
+                "price", "normalPrice", "salePrice", "goodsPrice", "originalPrice"
+            ])
+
+            coupon_price = deep_find_value(data, [
+                "couponPrice", "discountPrice", "finalPrice", "memberPrice"
+            ])
+
+            sale_rate = deep_find_value(data, [
+                "couponSaleRate", "saleRate", "discountRate"
+            ])
+
+            if product_name or price:
+                return {
+                    "product_name": product_name or "UNKNOWN",
+                    "brand_name": brand_name or "UNKNOWN",
+                    "price": to_number(price),
+                    "coupon_price": to_number(coupon_price),
+                    "sale_rate": to_number(sale_rate)
+                }
 
         except Exception as e:
-            print(f"⚠️ 가격 API 실패: {api_url}")
+            print(f"⚠️ 상품정보 API 실패: {api_url}")
             print(e)
+
+    # ==========================================
+    # HTML fallback
+    # ==========================================
+
+    try:
+        print(f"🔍 HTML fallback 시도: {product_url}")
+
+        res = requests.get(product_url, headers=headers, timeout=10)
+
+        if res.status_code == 200:
+            html = res.text
+
+            title_match = re.search(
+                r'<meta property="og:title" content="([^"]+)"',
+                html
+            )
+
+            price_match = re.search(
+                r'<meta property="product:price:amount" content="([^"]+)"',
+                html
+            )
+
+            product_name = title_match.group(1).strip() if title_match else "UNKNOWN"
+            price = to_number(price_match.group(1)) if price_match else 0
+
+            return {
+                "product_name": product_name,
+                "brand_name": "UNKNOWN",
+                "price": price,
+                "coupon_price": 0,
+                "sale_rate": 0
+            }
+
+    except Exception as e:
+        print("⚠️ HTML fallback 실패")
+        print(e)
 
     return {
         "product_name": "UNKNOWN",
@@ -158,8 +253,8 @@ for product_url in product_urls:
 
         goods_no = goods_no_match.group(1)
 
-        # 가격 정보
-        product_info = get_product_info(goods_no)
+        # 상품명 / 가격 정보
+        product_info = get_product_info(goods_no, product_url)
 
         product_name = product_info["product_name"]
         brand_name = product_info["brand_name"]
@@ -168,8 +263,10 @@ for product_url in product_urls:
         sale_rate = product_info["sale_rate"]
 
         print(f"✅ 상품명: {product_name}")
+        print(f"✅ 브랜드: {brand_name}")
         print(f"✅ 가격: {price}")
         print(f"✅ 쿠폰가: {coupon_price}")
+        print(f"✅ 할인율: {sale_rate}")
 
         # 옵션 API
         option_api = f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/options?goodsSaleType=SALE&optKindCd=SHOES"
