@@ -24,15 +24,12 @@ creds = Credentials.from_service_account_info(
 
 client = gspread.authorize(creds)
 
-# 결과 저장 시트
 spreadsheet = client.open("무신사 신발 재고관리")
 result_sheet = spreadsheet.sheet1
-
-# URL 목록 시트
 url_sheet = spreadsheet.worksheet("URL_LIST")
 
 # ==========================================
-# 2. URL_LIST 시트에서 상품 URL 읽기
+# 2. URL_LIST 시트에서 URL 읽기
 # ==========================================
 
 url_values = url_sheet.col_values(1)
@@ -58,7 +55,7 @@ headers = {
 }
 
 # ==========================================
-# 4. 사용할 사이즈 컬럼
+# 4. 사이즈 컬럼
 # ==========================================
 
 SIZE_COLUMNS = [
@@ -69,7 +66,7 @@ SIZE_COLUMNS = [
 ]
 
 # ==========================================
-# 5. 가격 정보 가져오기 함수
+# 5. 가격 정보 가져오기
 # ==========================================
 
 def get_product_info(goods_no):
@@ -113,7 +110,7 @@ def get_product_info(goods_no):
     }
 
 # ==========================================
-# 6. 재고 상태 판정 함수
+# 6. 재고 상태 판정
 # ==========================================
 
 def parse_stock_status(stock):
@@ -121,21 +118,31 @@ def parse_stock_status(stock):
     out_of_stock = stock.get("outOfStock")
     related_option = stock.get("relatedOption")
 
-    # 무신사 직접 재고 있음
     if out_of_stock is False:
         if remain_qty is None:
             return "판매중"
         return str(remain_qty)
 
-    # 직접 재고는 없지만 브랜드배송/대체옵션 가능
     if related_option and related_option.get("outOfStock") is False:
         return "브랜드배송"
 
-    # 완전 품절
     return "품절"
 
 # ==========================================
-# 7. 상품 반복 시작
+# 7. 기존 URL 행 찾기
+# ==========================================
+
+def find_existing_row_by_url(sheet, product_url):
+    rows = sheet.get_all_values()
+
+    for idx, row in enumerate(rows[1:], start=2):
+        if len(row) >= 7 and row[6].strip() == product_url.strip():
+            return idx
+
+    return None
+
+# ==========================================
+# 8. 상품 반복 시작
 # ==========================================
 
 for product_url in product_urls:
@@ -143,7 +150,6 @@ for product_url in product_urls:
         print("=" * 50)
         print(f"🚀 상품 처리 시작: {product_url}")
 
-        # 상품번호 추출
         goods_no_match = re.search(r'/products/(\d+)', product_url)
 
         if not goods_no_match:
@@ -178,11 +184,8 @@ for product_url in product_urls:
         option_value_nos = []
 
         for item in option_values:
-            size_name = item["name"]
-            option_no = item["no"]
-
-            size_list.append(size_name)
-            option_value_nos.append(option_no)
+            size_list.append(item["name"])
+            option_value_nos.append(item["no"])
 
         print("✅ 사이즈 목록 확보 완료")
 
@@ -205,7 +208,7 @@ for product_url in product_urls:
 
         print("✅ 재고 API 연결 완료")
 
-        # 사이즈별 재고 딕셔너리 만들기
+        # 사이즈별 재고 맵
         stock_map = {}
 
         for idx, stock in enumerate(stock_data["data"]):
@@ -213,9 +216,7 @@ for product_url in product_urls:
                 continue
 
             size_name = size_list[idx]
-            stock_status = parse_stock_status(stock)
-
-            stock_map[size_name] = stock_status
+            stock_map[size_name] = parse_stock_status(stock)
 
         # 한 줄 데이터 생성
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -233,10 +234,18 @@ for product_url in product_urls:
         for size in SIZE_COLUMNS:
             row.append(stock_map.get(size, ""))
 
-        # 시트 저장
-        result_sheet.append_row(row)
+        # 기존 행 있으면 업데이트, 없으면 추가
+        existing_row = find_existing_row_by_url(result_sheet, product_url)
 
-        print(f"🔥 저장 완료: {product_name}")
+        if existing_row:
+            result_sheet.update(
+                values=[row],
+                range_name=f"A{existing_row}:W{existing_row}"
+            )
+            print(f"🔄 기존 행 업데이트 완료: {existing_row}행 / {product_name}")
+        else:
+            result_sheet.append_row(row)
+            print(f"➕ 신규 행 추가 완료: {product_name}")
 
         time.sleep(3)
 
