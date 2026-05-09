@@ -88,6 +88,7 @@ def to_number(value):
 def clean_price(value):
     price = to_number(value)
 
+    # 무신사 신발 가격 정상 범위만 인정
     if price < 1000 or price > 5000000:
         return 0
 
@@ -174,17 +175,26 @@ def get_price_from_html(product_url):
         html = res.text
 
         price_patterns = [
-            r'<meta property="product:price:amount" content="([^"]+)"',
-            r'"price"\s*:\s*"?([0-9,]+)"?',
-            r'"salePrice"\s*:\s*"?([0-9,]+)"?',
-            r'"normalPrice"\s*:\s*"?([0-9,]+)"?'
+            r'"salePrice"\s*:\s*([0-9]+)',
+            r'"goodsPrice"\s*:\s*([0-9]+)',
+            r'"normalPrice"\s*:\s*([0-9]+)',
+            r'"originalPrice"\s*:\s*([0-9]+)',
+            r'"price"\s*:\s*([0-9]+)',
+            r'"price"\s*:\s*"([0-9,]+)"',
+            r'<meta property="product:price:amount" content="([^"]+)"'
         ]
 
         for pattern in price_patterns:
-            match = re.search(pattern, html)
-            if match:
-                price = clean_price(match.group(1))
+            matches = re.findall(pattern, html)
+
+            if not matches:
+                continue
+
+            for match in matches:
+                price = clean_price(match)
+
                 if price > 0:
+                    print(f"💰 HTML 가격 발견: {price}")
                     return price
 
     except Exception as e:
