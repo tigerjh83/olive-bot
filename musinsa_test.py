@@ -66,28 +66,125 @@ SIZE_COLUMNS = [
 ]
 
 # ==========================================
-# 5. 가격 정보 추출 공통 함수
+# 5. 상품명 / 브랜드 / 가격 추출 함수
 # ==========================================
 
+def to_int_price(value):
+    """
+    가격 값이 int, str 어떤 형태로 와도 숫자로 변환
+    예: 129000, "129000", "129,000원"
+    """
+    if value is None:
+        return 0
+
+    if isinstance(value, int):
+        return value if value > 0 else 0
+
+    if isinstance(value, float):
+        return int(value) if value > 0 else 0
+
+    if isinstance(value, str):
+        numbers = re.sub(r"[^0-9]", "", value)
+        if numbers:
+            return int(numbers)
+
+    return 0
+
+
 def extract_product_info_from_items(items, goods_no):
+    """
+    curation / recommend API 안의 상품 리스트에서
+    현재 goods_no와 일치하는 상품명, 브랜드, 가격을 추출
+    """
     for item in items:
         if str(item.get("goodsNo")) == str(goods_no):
+            price = (
+                to_int_price(item.get("price"))
+                or to_int_price(item.get("finalPrice"))
+                or to_int_price(item.get("normalPrice"))
+                or to_int_price(item.get("salePrice"))
+                or to_int_price(item.get("sellPrice"))
+                or to_int_price(item.get("discountedPrice"))
+                or to_int_price(item.get("goodsPrice"))
+                or 0
+            )
+
+            coupon_price = (
+                to_int_price(item.get("couponPrice"))
+                or to_int_price(item.get("finalPrice"))
+                or to_int_price(item.get("salePrice"))
+                or price
+                or 0
+            )
+
+            sale_rate = (
+                to_int_price(item.get("couponSaleRate"))
+                or to_int_price(item.get("saleRate"))
+                or to_int_price(item.get("finalDiscount"))
+                or to_int_price(item.get("discountRate"))
+                or 0
+            )
+
             return {
                 "product_name": item.get("goodsName", "UNKNOWN"),
                 "brand_name": item.get("brandName", "UNKNOWN"),
-                "price": item.get("price", 0) or item.get("finalPrice", 0) or item.get("normalPrice", 0) or 0,
-                "coupon_price": item.get("couponPrice", 0) or item.get("finalPrice", 0) or 0,
-                "sale_rate": item.get("couponSaleRate", 0) or item.get("saleRate", 0) or item.get("finalDiscount", 0) or 0
+                "price": price,
+                "coupon_price": coupon_price,
+                "sale_rate": sale_rate
             }
 
     return None
 
-# ==========================================
-# 6. 가격 정보 가져오기 함수
-# ==========================================
+
+def find_price_recursively(obj):
+    """
+    API 응답 전체에서 가격처럼 보이는 필드를 재귀적으로 탐색
+    단, 상품명/브랜드는 절대 건드리지 않고 가격 보강용으로만 사용
+    """
+    price_keys = [
+        "price",
+        "finalPrice",
+        "normalPrice",
+        "salePrice",
+        "sellPrice",
+        "discountedPrice",
+        "goodsPrice",
+        "consumerPrice",
+        "listPrice",
+        "originalPrice"
+    ]
+
+    if isinstance(obj, dict):
+        for key in price_keys:
+            if key in obj:
+                price = to_int_price(obj.get(key))
+                if price > 0:
+                    return price
+
+        for value in obj.values():
+            found = find_price_recursively(value)
+            if found:
+                return found
+
+    elif isinstance(obj, list):
+        for item in obj:
+            found = find_price_recursively(item)
+            if found:
+                return found
+
+    return 0
+
 
 def get_product_info(goods_no):
-    # 1차, 2차: curation 계열
+    """
+    상품명/브랜드는 기존 curation/recommend 방식으로 최대한 살리고,
+    가격이 0일 때만 추가 탐색으로 보강하는 안전 버전
+    """
+    product_info = None
+
+    # ------------------------------------------
+    # 1차: 기존에 상품명/브랜드 가져오던 curation API
+    # ------------------------------------------
     curation_apis = [
         f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation/other-color",
         f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation"
@@ -95,65 +192,123 @@ def get_product_info(goods_no):
 
     for api_url in curation_apis:
         try:
-            print(f"🔍 가격 API 시도: {api_url}")
+            print(f"🔍 상품정보 API 시도: {api_url}")
 
             res = requests.get(api_url, headers=headers, timeout=10)
 
             if res.status_code != 200:
+                print(f"⚠️ 응답 실패: {res.status_code}")
                 continue
 
             data = res.json()
-
             tabs = data.get("data", {}).get("curationTabs", [])
 
             for tab in tabs:
                 items = tab.get("curationGoodsList", [])
-                product_info = extract_product_info_from_items(items, goods_no)
+                found_info = extract_product_info_from_items(items, goods_no)
 
-                if product_info:
-                    return product_info
+                if found_info:
+                    product_info = found_info
+                    print("✅ curation API에서 상품정보 확보")
+                    break
+
+            if product_info:
+                break
 
         except Exception as e:
-            print(f"⚠️ 가격 API 실패: {api_url}")
+            print(f"⚠️ curation API 실패: {api_url}")
             print(e)
 
-    # 3차: recommends/multi 계열
-    recommend_api = f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/recommends/multi?uuid=detail_goods_attributes_allbrand&limit=10"
+    # ------------------------------------------
+    # 2차: recommend API
+    # ------------------------------------------
+    if not product_info:
+        recommend_api = f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/recommends/multi?uuid=detail_goods_attributes_allbrand&limit=10"
 
-    try:
-        print(f"🔍 가격 API 시도: {recommend_api}")
+        try:
+            print(f"🔍 추천 상품정보 API 시도: {recommend_api}")
 
-        res = requests.get(recommend_api, headers=headers, timeout=10)
+            res = requests.get(recommend_api, headers=headers, timeout=10)
 
-        if res.status_code == 200:
-            data = res.json()
+            if res.status_code == 200:
+                data = res.json()
+                similar_groups = data.get("data", {}).get("similar", [])
 
-            similar_groups = data.get("data", {}).get("similar", [])
+                for group in similar_groups:
+                    recommends_tabs = group.get("recommendsTabs", [])
 
-            for group in similar_groups:
-                recommends_tabs = group.get("recommendsTabs", [])
+                    for tab in recommends_tabs:
+                        items = tab.get("recommendedGoodsList", [])
+                        found_info = extract_product_info_from_items(items, goods_no)
 
-                for tab in recommends_tabs:
-                    items = tab.get("recommendedGoodsList", [])
-                    product_info = extract_product_info_from_items(items, goods_no)
+                        if found_info:
+                            product_info = found_info
+                            print("✅ recommend API에서 상품정보 확보")
+                            break
 
                     if product_info:
-                        return product_info
+                        break
+            else:
+                print(f"⚠️ recommend 응답 실패: {res.status_code}")
 
-    except Exception as e:
-        print(f"⚠️ recommend 가격 API 실패")
-        print(e)
+        except Exception as e:
+            print("⚠️ recommend API 실패")
+            print(e)
 
-    return {
-        "product_name": "UNKNOWN",
-        "brand_name": "UNKNOWN",
-        "price": 0,
-        "coupon_price": 0,
-        "sale_rate": 0
-    }
+    # ------------------------------------------
+    # 3차: 그래도 없으면 기본값
+    # ------------------------------------------
+    if not product_info:
+        product_info = {
+            "product_name": "UNKNOWN",
+            "brand_name": "UNKNOWN",
+            "price": 0,
+            "coupon_price": 0,
+            "sale_rate": 0
+        }
+
+    # ------------------------------------------
+    # 4차: 가격이 0이면 가격만 보강
+    # 상품명/브랜드는 절대 덮어쓰지 않음
+    # ------------------------------------------
+    if not product_info.get("price"):
+        extra_price_apis = [
+            f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/recommends/multi?uuid=detail_goods_attributes_allbrand&limit=10",
+            f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation",
+            f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation/other-color"
+        ]
+
+        for api_url in extra_price_apis:
+            try:
+                print(f"🔍 가격 보강 API 시도: {api_url}")
+
+                res = requests.get(api_url, headers=headers, timeout=10)
+
+                if res.status_code != 200:
+                    print(f"⚠️ 가격 보강 응답 실패: {res.status_code}")
+                    continue
+
+                data = res.json()
+                found_price = find_price_recursively(data)
+
+                if found_price:
+                    product_info["price"] = found_price
+
+                    if not product_info.get("coupon_price"):
+                        product_info["coupon_price"] = found_price
+
+                    print(f"✅ 가격 보강 성공: {found_price}")
+                    break
+
+            except Exception as e:
+                print(f"⚠️ 가격 보강 실패: {api_url}")
+                print(e)
+
+    return product_info
+
 
 # ==========================================
-# 7. 재고 상태 판정
+# 6. 재고 상태 판정
 # ==========================================
 
 def parse_stock_status(stock):
@@ -171,8 +326,9 @@ def parse_stock_status(stock):
 
     return "품절"
 
+
 # ==========================================
-# 8. 기존 URL 행 찾기
+# 7. 기존 URL 행 찾기
 # ==========================================
 
 def find_existing_row_by_url(sheet, product_url):
@@ -184,8 +340,9 @@ def find_existing_row_by_url(sheet, product_url):
 
     return None
 
+
 # ==========================================
-# 9. 상품 반복 시작
+# 8. 상품 반복 시작
 # ==========================================
 
 for product_url in product_urls:
@@ -200,8 +357,9 @@ for product_url in product_urls:
             continue
 
         goods_no = goods_no_match.group(1)
+        print(f"✅ 상품번호: {goods_no}")
 
-        # 가격 정보
+        # 상품명 / 브랜드 / 가격 정보
         product_info = get_product_info(goods_no)
 
         product_name = product_info["product_name"]
@@ -211,11 +369,15 @@ for product_url in product_urls:
         sale_rate = product_info["sale_rate"]
 
         print(f"✅ 상품명: {product_name}")
+        print(f"✅ 브랜드: {brand_name}")
         print(f"✅ 가격: {price}")
         print(f"✅ 쿠폰가/최종가: {coupon_price}")
+        print(f"✅ 할인율: {sale_rate}")
 
         # 옵션 API
         option_api = f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/options?goodsSaleType=SALE&optKindCd=SHOES"
+
+        print(f"🔍 옵션 API 시도: {option_api}")
 
         option_res = requests.get(option_api, headers=headers, timeout=10)
         option_res.raise_for_status()
@@ -238,6 +400,8 @@ for product_url in product_urls:
         payload = {
             "optionValueNos": option_value_nos
         }
+
+        print(f"🔍 재고 API 시도: {stock_api}")
 
         stock_res = requests.post(
             stock_api,
