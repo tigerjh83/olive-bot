@@ -54,6 +54,12 @@ headers = {
     "user-agent": "Mozilla/5.0"
 }
 
+html_headers = {
+    "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "referer": "https://www.musinsa.com/",
+    "user-agent": "Mozilla/5.0"
+}
+
 # ==========================================
 # 4. 사이즈 컬럼
 # ==========================================
@@ -66,7 +72,7 @@ SIZE_COLUMNS = [
 ]
 
 # ==========================================
-# 5. 가격/상품정보 함수
+# 5. 공통 변환 함수
 # ==========================================
 
 def to_int_price(value):
@@ -87,10 +93,24 @@ def to_int_price(value):
     return 0
 
 
+def clean_text(value):
+    if value is None:
+        return ""
+
+    if not isinstance(value, str):
+        value = str(value)
+
+    return re.sub(r"\s+", " ", value).strip()
+
+
+# ==========================================
+# 6. 상품명 / 브랜드 / 가격 추출
+# ==========================================
+
 def extract_product_info_from_items(items, goods_no):
     """
-    기존에 상품명/브랜드 잘 가져오던 방식.
-    이건 최대한 건드리지 않는다.
+    기존에 상품명/브랜드 가져오던 방식.
+    goodsNo가 일치하는 상품만 사용.
     """
     for item in items:
         if str(item.get("goodsNo")) == str(goods_no):
@@ -122,8 +142,8 @@ def extract_product_info_from_items(items, goods_no):
             )
 
             return {
-                "product_name": item.get("goodsName", "UNKNOWN"),
-                "brand_name": item.get("brandName", "UNKNOWN"),
+                "product_name": clean_text(item.get("goodsName")) or "UNKNOWN",
+                "brand_name": clean_text(item.get("brandName")) or "UNKNOWN",
                 "price": price,
                 "coupon_price": coupon_price,
                 "sale_rate": sale_rate
@@ -134,9 +154,8 @@ def extract_product_info_from_items(items, goods_no):
 
 def find_price_recursively(obj):
     """
-    이번에 가격 가져오던 방식.
-    API 응답 전체에서 가격 필드만 뒤진다.
-    상품명/브랜드는 여기서 절대 안 건드림.
+    가격만 API 응답 전체에서 탐색.
+    상품명/브랜드는 여기서 절대 건드리지 않음.
     """
     price_keys = [
         "price",
@@ -173,27 +192,77 @@ def find_price_recursively(obj):
     return 0
 
 
+def get_name_from_html(goods_no):
+    """
+    API에서 상품명을 못 찾을 때 HTML title / og:title 보강.
+    브랜드는 정확도가 낮아서 UNKNOWN 유지.
+    """
+    urls = [
+        f"https://www.musinsa.com/products/{goods_no}",
+        f"https://goods.musinsa.com/app/goods/{goods_no}"
+    ]
+
+    for url in urls:
+        try:
+            print(f"🔍 HTML 상품명 보강 시도: {url}")
+
+            res = requests.get(url, headers=html_headers, timeout=10)
+
+            if res.status_code != 200:
+                print(f"⚠️ HTML 응답 실패: {res.status_code}")
+                continue
+
+            html = res.text
+
+            og_match = re.search(
+                r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
+                html,
+                re.IGNORECASE
+            )
+
+            if og_match:
+                title = clean_text(og_match.group(1))
+                title = re.sub(r"\s*-\s*무신사.*$", "", title).strip()
+                title = re.sub(r"\s*\|\s*무신사.*$", "", title).strip()
+
+                if title:
+                    return title
+
+            title_match = re.search(
+                r"<title>(.*?)</title>",
+                html,
+                re.IGNORECASE | re.DOTALL
+            )
+
+            if title_match:
+                title = clean_text(title_match.group(1))
+                title = re.sub(r"\s*-\s*무신사.*$", "", title).strip()
+                title = re.sub(r"\s*\|\s*무신사.*$", "", title).strip()
+
+                if title:
+                    return title
+
+        except Exception as e:
+            print("⚠️ HTML 상품명 보강 실패")
+            print(e)
+
+    return ""
+
+
 def get_product_info(goods_no):
     """
-    최종 합친 버전.
-
-    1. 상품명/브랜드는 기존 방식으로 가져온다.
-    2. 기존 방식에서 가격까지 나오면 그대로 사용.
-    3. 가격이 0이면, 이번에 성공했던 가격 재귀탐색으로 가격만 보강.
-    4. 상품명/브랜드는 절대 덮어쓰지 않는다.
+    상품명/브랜드는 기존 방식.
+    가격은 기존 방식 실패 시 재귀탐색으로 보강.
     """
-
     product_info = None
     saved_api_jsons = []
 
-    # ------------------------------------------
-    # 1차: 기존 curation API
-    # ------------------------------------------
     curation_apis = [
         f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation/other-color",
         f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/curation"
     ]
 
+    # 1차: curation 기존 방식
     for api_url in curation_apis:
         try:
             print(f"🔍 기존 상품정보 API 시도: {api_url}")
@@ -215,7 +284,7 @@ def get_product_info(goods_no):
 
                 if found_info:
                     product_info = found_info
-                    print("✅ 기존 방식으로 상품명/브랜드 확보")
+                    print("✅ curation 기존 방식으로 상품명/브랜드 확보")
                     break
 
             if product_info:
@@ -225,9 +294,7 @@ def get_product_info(goods_no):
             print(f"⚠️ curation API 실패: {api_url}")
             print(e)
 
-    # ------------------------------------------
-    # 2차: 기존 recommend API
-    # ------------------------------------------
+    # 2차: recommend 기존 방식
     recommend_api = f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/recommends/multi?uuid=detail_goods_attributes_allbrand&limit=10"
 
     try:
@@ -239,7 +306,6 @@ def get_product_info(goods_no):
             data = res.json()
             saved_api_jsons.append(data)
 
-            # 상품명/브랜드가 아직 없으면 기존 방식으로 찾기
             if not product_info:
                 similar_groups = data.get("data", {}).get("similar", [])
 
@@ -264,9 +330,7 @@ def get_product_info(goods_no):
         print("⚠️ recommend API 실패")
         print(e)
 
-    # ------------------------------------------
-    # 3차: 그래도 상품정보 없으면 기본값
-    # ------------------------------------------
+    # 3차: 없으면 기본값
     if not product_info:
         product_info = {
             "product_name": "UNKNOWN",
@@ -276,14 +340,17 @@ def get_product_info(goods_no):
             "sale_rate": 0
         }
 
-    # ------------------------------------------
-    # 4차: 가격만 보강
-    # 상품명/브랜드는 절대 건드리지 않음
-    # ------------------------------------------
+    # 4차: 상품명 HTML 보강
+    if product_info["product_name"] == "UNKNOWN":
+        html_name = get_name_from_html(goods_no)
+        if html_name:
+            product_info["product_name"] = html_name
+            print(f"✅ HTML에서 상품명 보강 성공: {html_name}")
+
+    # 5차: 가격만 보강
     if not product_info.get("price"):
         print("🔧 가격이 0이라 가격만 보강 시도")
 
-        # 이미 받아온 API 응답들 먼저 뒤짐
         for data in saved_api_jsons:
             found_price = find_price_recursively(data)
 
@@ -296,7 +363,6 @@ def get_product_info(goods_no):
                 print(f"✅ 저장된 API 응답에서 가격 보강 성공: {found_price}")
                 break
 
-        # 그래도 없으면 API를 다시 한번 직접 호출해서 가격만 뒤짐
         if not product_info.get("price"):
             extra_price_apis = [
                 recommend_api,
@@ -330,7 +396,6 @@ def get_product_info(goods_no):
                     print(f"⚠️ 가격 보강 실패: {api_url}")
                     print(e)
 
-    # 쿠폰가 비어 있으면 가격으로 맞춤
     if product_info.get("price") and not product_info.get("coupon_price"):
         product_info["coupon_price"] = product_info["price"]
 
@@ -338,7 +403,7 @@ def get_product_info(goods_no):
 
 
 # ==========================================
-# 6. 재고 상태 판정
+# 7. 재고 상태 판정
 # ==========================================
 
 def parse_stock_status(stock):
@@ -358,7 +423,7 @@ def parse_stock_status(stock):
 
 
 # ==========================================
-# 7. 기존 URL 행 찾기
+# 8. 기존 URL 행 찾기
 # ==========================================
 
 def find_existing_row_by_url(sheet, product_url):
@@ -371,8 +436,56 @@ def find_existing_row_by_url(sheet, product_url):
     return None
 
 
+def get_existing_row_values(sheet, row_no):
+    try:
+        return sheet.row_values(row_no)
+    except Exception:
+        return []
+
+
+def preserve_existing_info_if_unknown(product_info, existing_row_values):
+    """
+    기존 시트에 상품명/브랜드가 있으면 UNKNOWN으로 덮어쓰지 않게 보존.
+    B열 = 상품명
+    C열 = 브랜드
+    D열 = 가격
+    E열 = 쿠폰가/최종가
+    F열 = 할인율
+    """
+    if not existing_row_values:
+        return product_info
+
+    old_product_name = existing_row_values[1].strip() if len(existing_row_values) > 1 else ""
+    old_brand_name = existing_row_values[2].strip() if len(existing_row_values) > 2 else ""
+    old_price = to_int_price(existing_row_values[3]) if len(existing_row_values) > 3 else 0
+    old_coupon_price = to_int_price(existing_row_values[4]) if len(existing_row_values) > 4 else 0
+    old_sale_rate = to_int_price(existing_row_values[5]) if len(existing_row_values) > 5 else 0
+
+    if product_info["product_name"] == "UNKNOWN" and old_product_name:
+        product_info["product_name"] = old_product_name
+        print(f"🛡️ 기존 시트 상품명 보존: {old_product_name}")
+
+    if product_info["brand_name"] == "UNKNOWN" and old_brand_name:
+        product_info["brand_name"] = old_brand_name
+        print(f"🛡️ 기존 시트 브랜드 보존: {old_brand_name}")
+
+    if not product_info.get("price") and old_price:
+        product_info["price"] = old_price
+        print(f"🛡️ 기존 시트 가격 보존: {old_price}")
+
+    if not product_info.get("coupon_price") and old_coupon_price:
+        product_info["coupon_price"] = old_coupon_price
+        print(f"🛡️ 기존 시트 쿠폰가 보존: {old_coupon_price}")
+
+    if not product_info.get("sale_rate") and old_sale_rate:
+        product_info["sale_rate"] = old_sale_rate
+        print(f"🛡️ 기존 시트 할인율 보존: {old_sale_rate}")
+
+    return product_info
+
+
 # ==========================================
-# 8. 상품 반복 시작
+# 9. 상품 반복 시작
 # ==========================================
 
 for product_url in product_urls:
@@ -389,8 +502,19 @@ for product_url in product_urls:
         goods_no = goods_no_match.group(1)
         print(f"✅ 상품번호: {goods_no}")
 
+        # 기존 행 먼저 찾기
+        existing_row = find_existing_row_by_url(result_sheet, product_url)
+        existing_row_values = []
+
+        if existing_row:
+            existing_row_values = get_existing_row_values(result_sheet, existing_row)
+            print(f"✅ 기존 행 발견: {existing_row}행")
+
         # 상품명 / 브랜드 / 가격 정보
         product_info = get_product_info(goods_no)
+
+        # 핵심 안전장치: UNKNOWN이면 기존 시트 값 보존
+        product_info = preserve_existing_info_if_unknown(product_info, existing_row_values)
 
         product_name = product_info["product_name"]
         brand_name = product_info["brand_name"]
@@ -472,8 +596,6 @@ for product_url in product_urls:
             row.append(stock_map.get(size, ""))
 
         # 기존 행 있으면 업데이트, 없으면 추가
-        existing_row = find_existing_row_by_url(result_sheet, product_url)
-
         if existing_row:
             result_sheet.update(
                 values=[row],
